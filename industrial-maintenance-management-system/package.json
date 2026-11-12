@@ -1,0 +1,16 @@
+{
+  "name": "industrial-maintenance-management-system",
+  "version": "1.0.0",
+  "description": "Industrial Maintanance Management System",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "script": {
+    "start": "node src/index.js"
+  }
+}
