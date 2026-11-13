@@ -25,7 +25,7 @@ const machines = [
     },
     {
         machineId : "WLD-RF-001",
-        machineName : "Rear FLoor Welding Machine1",
+        machineName : "Rear Floor Welding Machine1",
         area : "RF",
         machineStatus : "RUNNING",
         technician : "Hamid"
@@ -36,7 +36,7 @@ machines.push({
     machineId : "WLD-RF-002",
     machineName : "Rear Floor Welding Machine 2",
     area : "RF",
-    machineStatus : "RUNNING",
+    machineStatus : "STOPPED",
     technician : "Hamdan"
 });
 
@@ -75,7 +75,7 @@ console.log(`Total Machines : ${machines.length}`);
 let runningMachine = 0;
 let stoppedMachine = 0;
 
-for(machine of machines){
+for(const machine of machines){
     if(machine.machineStatus === "RUNNING"){
         runningMachine++;
     } else if(machine.machineStatus === "STOPPED"){
@@ -85,6 +85,23 @@ for(machine of machines){
 
 console.log(`RUNNING    : ${runningMachine}`);
 console.log(`STOPPED    : ${stoppedMachine}`);
+
+//STOPPED Machines LIST
+const stoppedMachines = machines.filter(function(machine){
+    return machine.machineStatus === "STOPPED";
+});
+console.log(stoppedMachines);
+
+//RUNNING Machines List
+const runningMachinesList = machines.filter(function(machine){
+    return machine.machineStatus === "RUNNING";
+});
+for(const machine of runningMachinesList){
+    console.log(`${machine.machineId} - ${machine.machineName}`);
+}
+
+console.log(`Total RUnning Machines : ${runningMachinesList.length}`);
+
 
 console.log("================================");
 console.log("System Initialized Successfully!");
