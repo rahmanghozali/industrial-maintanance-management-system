@@ -1,5 +1,6 @@
 
 const express = require("express");
+const pool = require("./db");
 
 const app = express();
 const PORT = 3000;
@@ -7,181 +8,304 @@ const PORT = 3000;
 // Middleware: parse incoming JSON request bodies
 app.use(express.json());
 
-// Temporary machine data
-const machines = [
-    {
-        machineId: "WLD-KD2-001",
-        machineName: "Spot Welding Machine R",
-        area: "KD2",
-        machineStatus: "RUNNING",
-        technician: "Mahmud"
-    },
-    {
-        machineId: "WLD-KD2-002",
-        machineName: "Spot Welding Machine L",
-        area: "KD2",
-        machineStatus: "RUNNING",
-        technician: "Ahmad"
-    },
-    {
-        machineId: "WLD-RF-001",
-        machineName: "Rear Floor Welding Machine 1",
-        area: "RF",
-        machineStatus: "RUNNING",
-        technician: "Hamid"
-    },
-    {
-        machineId: "WLD-RF-002",
-        machineName: "Rear Floor Welding Machine 2",
-        area: "RF",
-        machineStatus: "STOPPED",
-        technician: "Hamdan"
-    }
-];
 
 // Helper: validate machine status
 function isValidMachineStatus(status) {
     return ["RUNNING", "STOPPED", "MAINTENANCE"].includes(status);
 }
 
+// Helper: validate non-empty string
+function isNonEmptyString(value) {
+    return typeof value === "string" && value.trim().length > 0;
+}
+
 // ========================================
 // GET ALL MACHINES
 // ========================================
+app.get("/api/machines", async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT
+                machine_id AS "machineId",
+                machine_name AS "machineName",
+                area,
+                machine_status AS "machineStatus",
+                technician,
+                created_at AS "createdAt",
+                updated_at AS "updatedAt"
+            FROM machines
+            ORDER BY machine_id ASC
+        `);
 
-app.get("/api/machines", (req, res) => {
-    res.status(200).json(machines);
+        res.status(200).json(result.rows);
+
+    } catch (error) {
+        console.error("Error fetching machines:", error.message);
+
+        res.status(500).json({
+            message: "Internal server error"
+        });
+    }
 });
 
 // ========================================
 // GET MACHINE BY ID
 // ========================================
+app.get("/api/machines/:id", async (req, res) => {
+    try {
+        const machineId = req.params.id;
 
-app.get("/api/machines/:id", (req, res) => {
-    const machine = machines.find(
-        item => item.machineId === req.params.id
-    );
+        const result = await pool.query(
+            `
+            SELECT
+                machine_id AS "machineId",
+                machine_name AS "machineName",
+                area,
+                machine_status AS "machineStatus",
+                technician,
+                created_at AS "createdAt",
+                updated_at AS "updatedAt"
+            FROM machines
+            WHERE machine_id = $1
+            `,
+            [machineId]
+        );
 
-    if (!machine) {
-        return res.status(404).json({
-            message: "Machine not found"
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                message: "Machine not found"
+            });
+        }
+
+        res.status(200).json(result.rows[0]);
+
+    } catch (error) {
+        console.error("Error fetching machine:", error.message);
+
+        res.status(500).json({
+            message: "Internal server error"
         });
     }
-
-    res.status(200).json(machine);
 });
+
 
 // ========================================
 // CREATE NEW MACHINE
 // ========================================
+app.post("/api/machines", async (req, res) => {
+    try {
+        if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
+            return res.status(400).json({
+                message: "Request body must be a valid JSON object"
+            });
+        }
+        
+        const {
+            machineId,
+            machineName,
+            area,
+            machineStatus,
+            technician
+        } = req.body;
 
-app.post("/api/machines", (req, res) => {
-    const { machineId, machineName, area, machineStatus, technician } = req.body;
+        // Validate required fields
+        if (
+            !isNonEmptyString(machineId) ||
+            !isNonEmptyString(machineName) ||
+            !isNonEmptyString(area) ||
+            !isNonEmptyString(machineStatus) ||
+            !isNonEmptyString(technician)) {
+                return res.status(400).json({
+                    message: "All machine fields are required and must be non-empty strings"
+                });
+            }
 
-    if (!machineId || !machineName || !area || !machineStatus || !technician) {
-        return res.status(400).json({
-            message: "All machine fields are required"
+        // Validate machine status
+        if (!isValidMachineStatus(machineStatus)) {
+            return res.status(400).json({
+                message: "Invalid machine status"
+            });
+        }
+        
+        // Insert machine into PostgreSQL
+        const result = await pool.query(
+            `
+            INSERT INTO machines (
+                machine_id,
+                machine_name,
+                area,
+                machine_status,
+                technician
+            )
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING
+                machine_id AS "machineId",
+                machine_name AS "machineName",
+                area,
+                machine_status AS "machineStatus",
+                technician,
+                created_at AS "createdAt",
+                updated_at AS "updatedAt"
+            `,
+            [
+                machineId,
+                machineName,
+                area,
+                machineStatus,
+                technician
+            ]
+        );
+
+        res.status(201).json({
+            message: "Machine created successfully",
+            data: result.rows[0]
+        });
+
+    } catch (error) {
+        console.error("Error creating machine:", error.message);
+
+        // Handle duplicate primary key
+        if (error.code === "23505") {
+            return res.status(409).json({
+                message: "Machine ID already exists"
+            });
+        }
+
+        res.status(500).json({
+            message: "Internal server error"
         });
     }
-
-    if (!isValidMachineStatus(machineStatus)) {
-        return res.status(400).json({
-            message: "Invalid machine status"
-        });
-    }
-
-    const existingMachine = machines.find(
-        item => item.machineId === machineId
-    );
-
-    if (existingMachine) {
-        return res.status(409).json({
-            message: "Machine ID already exists"
-        });
-    }
-
-    const newMachine = {
-        machineId,
-        machineName,
-        area,
-        machineStatus,
-        technician
-    };
-
-    machines.push(newMachine);
-
-    res.status(201).json({
-        message: "Machine created successfully",
-        data: newMachine
-    });
 });
 
 // ========================================
 // UPDATE MACHINE
 // ========================================
+app.put("/api/machines/:id", async (req, res) => {
+    try {
+        if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
+            return res.status(400).json({
+                message: "Request body must be a valid JSON object"
+            });
+        }
+        
+        const { machineName, area, machineStatus, technician } = req.body;
+        const machineId = req.params.id;
 
-app.put("/api/machines/:id", (req, res) => {
-    const machine = machines.find(
-        item => item.machineId === req.params.id
-    );
+        // Validate required fields
+        if (
+            !isNonEmptyString(machineName) || 
+            !isNonEmptyString(area) ||
+            !isNonEmptyString(machineStatus) ||
+            !isNonEmptyString(technician)) {
+                return res.status(400).json({
+                    message: "All update fields are required and must be non-empty strings"
+                });
+            }
 
-    if (!machine) {
-        return res.status(404).json({
-            message: "Machine not found"
+        // Validate machine status
+        if (!isValidMachineStatus(machineStatus)) {
+            return res.status(400).json({
+                message: "Invalid machine status"
+            });
+        }
+
+        // Update machine in PostgreSQL
+        const result = await pool.query(
+            `
+            UPDATE machines
+            SET
+                machine_name = $1,
+                area = $2,
+                machine_status = $3,
+                technician = $4,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE machine_id = $5
+            RETURNING
+                machine_id AS "machineId",
+                machine_name AS "machineName",
+                area,
+                machine_status AS "machineStatus",
+                technician,
+                created_at AS "createdAt",
+                updated_at AS "updatedAt"
+            `,
+            [
+                machineName,
+                area,
+                machineStatus,
+                technician,
+                machineId
+            ]
+        );
+
+        // Check whether machine exists
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                message: "Machine not found"
+            });
+        }
+
+        res.status(200).json({
+            message: "Machine updated successfully",
+            data: result.rows[0]
+        });
+
+    } catch (error) {
+        console.error("Error updating machine:", error.message);
+
+        res.status(500).json({
+            message: "Internal server error"
         });
     }
-
-    const { machineName, area, machineStatus, technician } = req.body;
-
-    if (!machineName || !area || !machineStatus || !technician) {
-        return res.status(400).json({
-            message: "All update fields are required"
-        });
-    }
-
-    if (!isValidMachineStatus(machineStatus)) {
-        return res.status(400).json({
-            message: "Invalid machine status"
-        });
-    }
-
-    machine.machineName = machineName;
-    machine.area = area;
-    machine.machineStatus = machineStatus;
-    machine.technician = technician;
-
-    res.status(200).json({
-        message: "Machine updated successfully",
-        data: machine
-    });
 });
 
 // ========================================
 // DELETE MACHINE
 // ========================================
+app.delete("/api/machines/:id", async (req, res) => {
+    try {
+        const machineId = req.params.id;
 
-app.delete("/api/machines/:id", (req, res) => {
-    const machineIndex = machines.findIndex(
-        item => item.machineId === req.params.id
-    );
+        const result = await pool.query(
+            `
+            DELETE FROM machines
+            WHERE machine_id = $1
+            RETURNING
+                machine_id AS "machineId",
+                machine_name AS "machineName",
+                area,
+                machine_status AS "machineStatus",
+                technician,
+                created_at AS "createdAt",
+                updated_at AS "updatedAt"
+            `,
+            [machineId]
+        );
 
-    if (machineIndex === -1) {
-        return res.status(404).json({
-            message: "Machine not found"
+        // Check whether machine exists
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                message: "Machine not found"
+            });
+        }
+
+        res.status(200).json({
+            message: "Machine deleted successfully",
+            data: result.rows[0]
+        });
+
+    } catch (error) {
+        console.error("Error deleting machine:", error.message);
+
+        res.status(500).json({
+            message: "Internal server error"
         });
     }
-
-    const deletedMachine = machines.splice(machineIndex, 1)[0];
-
-    res.status(200).json({
-        message: "Machine deleted successfully",
-        data: deletedMachine
-    });
 });
 
 // ========================================
 // START SERVER
 // ========================================
-
 app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
 });
