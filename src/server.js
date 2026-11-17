@@ -510,45 +510,282 @@ app.post("/api/work-orders", async (req, res) => {
 
 // ========================================
 // GET ALL WORK ORDERS
-// ========================================
+ // ========================================
+ // GET ALL WORK ORDERS WITH FILTERING AND PAGINATION
+ // ========================================
 app.get("/api/work-orders", async (req, res) => {
+
+    // Read query parameters
+    const {
+        status,
+        priority,
+        area,
+        technicianId,
+        page = "1",
+        limit = "10",
+        sortBy = "createdAt",
+        order = "DESC"
+    } = req.query;
+
+    // Allowed filter values
+    const validStatuses = [
+        "OPEN",
+        "IN_PROGRESS",
+        "ON_HOLD",
+        "COMPLETED",
+        "CANCELLED"
+    ];
+
+    const validPriorities = [
+        "LOW",
+        "MEDIUM",
+        "HIGH",
+        "CRITICAL"
+    ];
+
+    // Validate status
+    if (status && !validStatuses.includes(status)) {
+        return res.status(400).json({
+            message: "Invalid work order status filter"
+        });
+    }
+
+    // Validate priority
+    if (priority && !validPriorities.includes(priority)) {
+        return res.status(400).json({
+            message: "Invalid priority filter"
+        });
+    }
+
+    // Validate area
+    if (
+        area !== undefined &&
+        (
+            typeof area !== "string" ||
+            area.trim().length === 0 ||
+            area.trim().length > 50
+        )
+    ) {
+        return res.status(400).json({
+            message: "Invalid area filter"
+        });
+    }
+
+    // Validate technicianId
+    if (
+    technicianId !== undefined &&
+    (
+        typeof technicianId !== "string" ||
+        !/^[1-9]\d*$/.test(technicianId)
+    )
+    ) {
+        return res.status(400).json({
+            message: "Invalid technician ID filter"
+        });
+    }
+
+    // Allowed sorting columns
+    const allowedSortColumns = {
+        createdAt: "wo.created_at",
+        updatedAt: "wo.updated_at",
+        workOrderCode: "wo.work_order_code",
+        title: "wo.title",
+        status: "wo.status",
+        priority: `
+            CASE wo.priority
+                WHEN 'CRITICAL' THEN 1
+                WHEN 'HIGH' THEN 2
+                WHEN 'MEDIUM' THEN 3
+                WHEN 'LOW' THEN 4
+            END
+             `
+    };
+
+    // Validate sortBy
+    if (
+        typeof sortBy !== "string" ||
+        !Object.prototype.hasOwnProperty.call(
+            allowedSortColumns,
+            sortBy
+        )
+    ) {
+        return res.status(400).json({
+            message: "Invalid sort field"
+        });
+    }
+
+    // Validate order
+    if (typeof order !== "string") {
+        return res.status(400).json({
+            message: "Sort order must be ASC or DESC"
+        });
+    }
+
+    const sortOrder = order.toUpperCase();
+
+    if (!["ASC", "DESC"].includes(sortOrder)) {
+        return res.status(400).json({
+            message: "Sort order must be ASC or DESC"
+        });
+    }
+
+    const sortColumn = allowedSortColumns[sortBy];
+    const outerSortColumn = sortColumn.replaceAll("wo.", "pwo.");
+
+    // Validate pagination
+    const pageNumber = Number(page);
+    const limitNumber = Number(limit);
+
+    if (
+        !Number.isSafeInteger(pageNumber) ||
+        pageNumber < 1 ||
+        !Number.isSafeInteger(limitNumber) ||
+        limitNumber < 1 ||
+        limitNumber > 100
+    ) {
+        return res.status(400).json({
+            message: "Page must be a positive integer and limit must be between 1 and 100"
+        });
+    }
+
+    const offset = (pageNumber - 1) * limitNumber;
+
+    if (!Number.isSafeInteger(offset)) {
+        return res.status(400).json({
+            message: "Pagination offset is too large"
+        });
+    }
+
     try {
-        const result = await pool.query(`
+        // Build dynamic WHERE conditions
+        const conditions = [];
+        const filterValues = [];
+
+        if (status) {
+            filterValues.push(status);
+            conditions.push(
+                `wo.status = $${filterValues.length}`
+            );
+        }
+
+        if (priority) {
+            filterValues.push(priority);
+            conditions.push(
+                `wo.priority = $${filterValues.length}`
+            );
+        }
+
+        if (area) {
+            filterValues.push(area.trim());
+            conditions.push(
+                `m.area = $${filterValues.length}`
+            );
+        }
+
+        if (technicianId) {
+            filterValues.push(technicianId);
+
+            conditions.push(`
+                EXISTS (
+                    SELECT 1
+                    FROM work_order_assignments wa_filter
+                    WHERE wa_filter.work_order_id = wo.work_order_id
+                    AND wa_filter.technician_id = $${filterValues.length}
+                )
+            `);
+        }
+
+        const whereClause = conditions.length > 0
+            ? `WHERE ${conditions.join(" AND ")}`
+            : "";
+
+        // Count matching work orders
+        const countResult = await pool.query(
+            `
+            SELECT COUNT(*) AS total
+            FROM work_orders wo
+            JOIN machines m
+                ON wo.machine_id = m.machine_id
+            ${whereClause}
+            `,
+            filterValues
+        );
+
+        const totalRecords = Number(countResult.rows[0].total);
+        const totalPages = Math.ceil(totalRecords / limitNumber);
+
+        // Add pagination parameters
+        const paginationValues = [
+            ...filterValues,
+            limitNumber,
+            offset
+        ];
+
+        const limitPosition = filterValues.length + 1;
+        const offsetPosition = filterValues.length + 2;
+
+        // Get paginated work orders and their related data
+        const result = await pool.query(
+            `
+            WITH paginated_work_orders AS (
+                SELECT
+                    wo.work_order_id,
+                    wo.work_order_code,
+                    wo.machine_id,
+                    wo.title,
+                    wo.description,
+                    wo.priority,
+                    wo.status,
+                    wo.created_at,
+                    wo.updated_at
+                FROM work_orders wo
+                JOIN machines m
+                    ON wo.machine_id = m.machine_id
+                ${whereClause}
+                ORDER BY ${sortColumn} ${sortOrder},
+                        wo.work_order_id ASC
+                LIMIT $${limitPosition}
+                OFFSET $${offsetPosition}
+            )
+
             SELECT
-                wo.work_order_id AS "workOrderId",
-                wo.work_order_code AS "workOrderCode",
+                pwo.work_order_id AS "workOrderId",
+                pwo.work_order_code AS "workOrderCode",
 
                 m.machine_id AS "machineId",
                 m.machine_name AS "machineName",
                 m.area,
 
-                wo.title,
-                wo.description,
-                wo.priority,
-                wo.status,
-                wo.created_at AS "createdAt",
-                wo.updated_at AS "updatedAt",
+                pwo.title,
+                pwo.description,
+                pwo.priority,
+                pwo.status,
+                pwo.created_at AS "createdAt",
+                pwo.updated_at AS "updatedAt",
 
                 t.technician_id AS "technicianId",
                 t.technician_name AS "technicianName",
                 t.specialization,
                 wa.assignment_no AS "assignmentNo"
 
-            FROM work_orders wo
+            FROM paginated_work_orders pwo
 
             JOIN machines m
-                ON wo.machine_id = m.machine_id
+                ON pwo.machine_id = m.machine_id
 
             LEFT JOIN work_order_assignments wa
-                ON wo.work_order_id = wa.work_order_id
+                ON pwo.work_order_id = wa.work_order_id
 
             LEFT JOIN technicians t
                 ON wa.technician_id = t.technician_id
 
             ORDER BY
-                wo.work_order_id ASC,
+                ${outerSortColumn} ${sortOrder},
+                pwo.work_order_id ASC,
                 wa.assignment_no ASC
-        `);
+            `,
+            paginationValues
+        );
 
         // Group rows by work order
         const workOrdersMap = new Map();
@@ -576,7 +813,6 @@ app.get("/api/work-orders", async (req, res) => {
                 });
             }
 
-            // Add technician only if an assignment exists
             if (row.technicianId !== null) {
                 workOrdersMap.get(row.workOrderId).technicians.push({
                     technicianId: row.technicianId,
@@ -587,9 +823,15 @@ app.get("/api/work-orders", async (req, res) => {
             }
         }
 
-        res.status(200).json(
-            Array.from(workOrdersMap.values())
-        );
+        res.status(200).json({
+            data: Array.from(workOrdersMap.values()),
+            pagination: {
+                page: pageNumber,
+                limit: limitNumber,
+                totalRecords,
+                totalPages
+            }
+        });
 
     } catch (error) {
         console.error("Error fetching work orders:", error.message);
